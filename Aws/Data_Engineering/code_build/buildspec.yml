@@ -1,0 +1,81 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - echo "Installing dependencies..."
+      - pip install awscli
+      - pip install boto3
+
+  pre_build:
+    commands:
+      - echo "Detecting new tables in raw layer..."
+      # This Python script detects new tables in the raw S3 layer and generates a list of new tables
+      - python detect_new_tables.py > tables_list.txt
+
+      - echo "Generating Glue ETL scripts for new tables..."
+      # This Python script generates ETL scripts dynamically for each new table
+      - python generate_glue_scripts.py
+
+  build:
+    commands:
+      - echo "Creating/Updating Glue Jobs for new tables using CloudFormation..."
+      # Loop over each table to trigger CloudFormation stack creation/update for Glue Jobs
+      - |
+        for table in $(cat tables_list.txt); do
+          echo "Creating/Updating Glue Job for $table..."
+          aws cloudformation deploy \
+            --template-file glue_job_cloudformation.yaml \
+            --stack-name "GlueJobFor-$table" \
+            --parameter-overrides TableName=$table ScriptS3Bucket="scripts-bucket" TempS3Bucket="temp-bucket" \
+            --capabilities CAPABILITY_NAMED_IAM
+        done
+
+      - echo "Starting Glue jobs for all tables..."
+      # Loop over the list of tables and trigger Glue Jobs
+      - |
+        for table in $(cat tables_list.txt); do
+          echo "Starting Glue job for $table..."
+          aws glue start-job-run --job-name "GlueJobFor_$table"
+        done
+
+  post_build:
+    commands:
+      - echo "Running Data Quality Checks..."
+      # This Python script performs post-ETL data quality checks on all tables
+      - python data_quality_checks.py
+      - echo "ETL and DQC completed."
+
+artifacts:
+  files:
+    - tables_list.txt
+  discard-paths: yes
+
+
+
+# Explanation of Revised buildspec.yml
+# 1. Pre-build Phase
+# detect_new_tables.py:
+
+# This script scans the raw layer (S3) for any newly added tables and writes the names of those tables to a file called tables_list.txt.
+# generate_glue_scripts.py:
+
+# This script generates Glue ETL scripts for each new table based on a template. It will dynamically create a new Python script for each table, upload them to the S3 bucket that Glue references.
+# 2. Build Phase
+# CloudFormation Job Creation/Update:
+
+# For each table listed in tables_list.txt, CodeBuild uses the AWS CLI to trigger a CloudFormation deploy command. This creates or updates the Glue Job using a CloudFormation template (glue_job_cloudformation.yaml) for each new table.
+# The TableName parameter is passed dynamically for each table, and CloudFormation handles creating or updating the Glue Job.
+# bash
+# Copy code
+# aws cloudformation deploy \
+#     --template-file glue_job_cloudformation.yaml \
+#     --stack-name "GlueJobFor-$table" \
+#     --parameter-overrides TableName=$table ScriptS3Bucket="scripts-bucket" TempS3Bucket="temp-bucket" \
+#     --capabilities CAPABILITY_NAMED_IAM
+# Glue Job Execution:
+
+# After creating/updating the Glue Job for each table, the script loops over the list of tables and starts each Glue job using the AWS CLI.
+# 3. Post-build Phase
+# Data Quality Checks:
+# Once the Glue jobs have processed the data, a Python script runs Data Quality Checks to verify the integrity and correctness of the processed data.
