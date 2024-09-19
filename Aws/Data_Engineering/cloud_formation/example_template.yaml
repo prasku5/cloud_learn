@@ -1,0 +1,37 @@
+# We’ll use CloudFormation to automate the creation of Glue Jobs for each table. 
+# A single CloudFormation template will handle dynamic creation by using parameters.
+
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  GlueJobForTable:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub "GlueJobFor_${TableName}"
+      Role: arn:aws:iam::123456789012:role/GlueJobRole
+      Command:
+        Name: glueetl
+        ScriptLocation: !Sub "s3://${ScriptS3Bucket}/scripts/${TableName}_etl_script.py"
+      DefaultArguments:
+        --TempDir: !Sub "s3://${TempS3Bucket}/glue_temp"
+        --job-bookmark-option: job-bookmark-enable
+        --table-name: !Ref TableName
+        --target-layer: !Ref TargetLayer
+      GlueVersion: "2.0"
+      WorkerType: G.1X
+      NumberOfWorkers: 5
+      MaxRetries: 3
+
+Parameters:
+  TableName:
+    Type: String
+    Description: "The name of the table to process in the Glue job."
+  ScriptS3Bucket:
+    Type: String
+    Description: "S3 bucket where Glue ETL scripts are stored."
+  TempS3Bucket:
+    Type: String
+    Description: "S3 bucket where temporary files will be stored."
+  TargetLayer:
+    Type: String
+    Default: "staging"
+    Description: "Target layer (e.g., staging or final table)."
